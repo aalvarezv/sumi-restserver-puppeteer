@@ -37,17 +37,26 @@ app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
                 ...launchOptions
             });
         }
+
         //const [page] = await browser.Page(); abre 1 pagina a la vez y la cierra
         page = await browser.newPage();
         //obtiene el targetid del browser para devolver en la respuesta.
         let browserTargetId = browser.target()._targetId;
         //obtiene el targetid de la pagina para devolver en la respuesta.
         let pageTargetId = page.target()._targetId;
-
-        await page.goto('https://portal.sidiv.registrocivil.cl/usuarios-portal/pages/DocumentRequestStatus.xhtml', {
-            waitUntil: ["networkidle2"]
-        });
-
+        try {
+            await page.goto('https://portal.sidiv.registrocivil.cl/usuarios-portal/pages/DocumentRequestStatus.xhtml', {
+                waitUntil: "networkidle0",
+                timeout: 30000
+            });
+        } catch (e) {
+            console.log(e.message);
+            res.status(504).json({
+                error: 100,
+                mensaje: e.message
+            });
+            return;
+        }
         //obtiene el primer img dentro del div id='form:captchaPanel'
         const elements = await page.$$("[id='form:captchaPanel'] img");
         //graba la imagen en el disco local
@@ -55,13 +64,14 @@ app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
         //obtiene la imagen en base64
         const screenshotb64 = await elements[0].screenshot({ encoding: "base64" });
         //Envia mensaje al cliente con la screen en base64 de la captcha
-        res.json({
+        res.status(200).json({
             browserId: browserTargetId,
             pageId: pageTargetId,
             archivo: 'captcha.png',
             base64: screenshotb64
 
         });
+
     }
 
 });
@@ -193,15 +203,15 @@ app.post('/validaDocumento', async function(req, res) {
             //Si el popup no existe, entonces pasó la validación y no hay error.
             if (popupError == null) {
                 console.log({ error: 0, mensaje });
-                res.json({ error: 0, mensaje });
+                res.status(200).json({ error: 0, mensaje });
             } else {
                 //Si el popup existe, entonces error.
                 console.log({ error: 100, mensaje });
-                res.json({ error: 100, mensaje });
+                res.status(200).json({ error: 100, mensaje });
             }
         } else {
             console.log({ error: 100, mensaje: resp.error });
-            res.json({ error: 100, mensaje: resp.error });
+            res.status(500).json({ error: 100, mensaje: resp.error });
         }
 
         //await browser.close();
