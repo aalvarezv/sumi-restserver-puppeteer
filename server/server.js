@@ -1,9 +1,5 @@
-const puppeteer = require('puppeteer');
-const chromeOptions = {
-    headless: false,
-    defaultViewport: null,
-    slowMo: 80,
-};
+const puppeteer = require('puppeteer-core');
+const { getExecutablePath } = require('./util/utils');
 
 require('./config/config')
 const express = require('express')
@@ -17,11 +13,36 @@ app.use(bodyParser.json())
 
 let browser = null;
 let page = null;
+
 app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
 
-    (async function main() {
-        browser = await puppeteer.launch(chromeOptions);
+    (async function run() {
+        const executablePath = await getExecutablePath({});
+        await lauchpuppeteer({ executablePath });
+    })();
+
+    const lauchpuppeteer = async launchOptions => {
+        if (browser === null) {
+            browser = await puppeteer.launch({
+                defaultViewport: null,
+                headless: false,
+                slowMo: 80,
+                openInExistingWindow: true,
+                args: [
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding',
+                    '--no-sandbox'
+                ],
+                ...launchOptions
+            });
+        }
+        //const [page] = await browser.Page(); abre 1 pagina a la vez y la cierra
         page = await browser.newPage();
+        //obtiene el targetid del browser para devolver en la respuesta.
+        let browserTargetId = browser.target()._targetId;
+        //obtiene el targetid de la pagina para devolver en la respuesta.
+        let pageTargetId = page.target()._targetId;
 
         await page.goto('https://portal.sidiv.registrocivil.cl/usuarios-portal/pages/DocumentRequestStatus.xhtml', {
             waitUntil: ["networkidle2"]
@@ -35,23 +56,94 @@ app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
         const screenshotb64 = await elements[0].screenshot({ encoding: "base64" });
         //Envia mensaje al cliente con la screen en base64 de la captcha
         res.json({
+            browserId: browserTargetId,
+            pageId: pageTargetId,
             archivo: 'captcha.png',
             base64: screenshotb64
-        });
 
-    })()
+        });
+    }
 
 });
 
 app.post('/validaDocumento', async function(req, res) {
 
-    if (page === null) {
+    let body = req.body;
+    if (body.browserId === undefined || body.browserId === '') {
         res.status(400).json({
-            mensaje: 'No ha solicitado la captcha'
+            error: 100,
+            mensaje: 'browserId es requerido'
         })
     }
 
-    let body = req.body;
+    if (body.pageId === undefined || body.pageId === '') {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'pageId es requerido'
+        })
+    }
+
+    if (body.run === undefined || body.run === '') {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'run es requerido'
+        })
+    }
+
+    if (body.tipo_documento === undefined || body.tipo_documento === '') {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'tipo_documento es requerido'
+        })
+    }
+
+    if (body.numero_documento === undefined || body.numero_documento === '') {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'numero_documento es requerido'
+        })
+    }
+
+    if (body.captcha_txt === undefined || body.captcha_txt === '') {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'captcha_txt es requerido'
+        })
+    }
+
+    //consulta el browser por la targetid:body.browserId
+    let target = null;
+
+    try {
+        target = await browser.waitForTarget(target => target._targetId === body.browserId, { timeout: 3000 });
+    } catch (e) {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'timeout browser id es incorrecto, verifique'
+        })
+        return;
+    }
+
+    if (target === null) {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'browser id es incorrecto, verifique'
+        })
+    }
+
+    browser = await target.browser();
+
+    //obtiene el listado de paginas abiertas
+    let pageList = await browser.pages();
+    //consulta la pagina por el targetid:body.pageId
+    let page = await pageList.find(pag => pag.target()._targetId === body.pageId);
+    if (page === undefined) {
+        res.status(400).json({
+            error: 100,
+            mensaje: 'Error: page id es incorrecto, verifique'
+        })
+    }
+
     if (body !== undefined) {
         await page.type("[name='form:run']", body.run);
         await page.select("[name='form:selectDocType']", body.tipo_documento);
@@ -112,7 +204,8 @@ app.post('/validaDocumento', async function(req, res) {
             res.json({ error: 100, mensaje: resp.error });
         }
 
-        await browser.close();
+        //await browser.close();
+        page.close();
 
     }
 

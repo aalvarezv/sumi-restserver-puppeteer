@@ -10,7 +10,8 @@
   "license": "ISC",
   "dependencies": {
     "body-parser": "^1.19.0",
+    "carlo": "^0.9.46",
     "express": "^4.17.1",
-    "puppeteer": "^2.0.0"
+    "puppeteer-core": "^2.0.0"
   }
 }
