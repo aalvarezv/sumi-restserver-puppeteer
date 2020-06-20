@@ -51,11 +51,10 @@ app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
             });
         } catch (e) {
             console.log(e.message);
-            res.status(504).json({
+            return res.status(504).json({
                 error: 100,
                 mensaje: e.message
             });
-            return;
         }
         //obtiene el primer img dentro del div id='form:captchaPanel'
         const elements = await page.$$("[id='form:captchaPanel'] img");
@@ -80,143 +79,193 @@ app.post('/validaDocumento', async function(req, res) {
 
     let body = req.body;
     if (body.browserId === undefined || body.browserId === '') {
-        res.status(400).json({
+        return res.status(400).json({
             error: 100,
             mensaje: 'browserId es requerido'
-        })
+        });
     }
 
     if (body.pageId === undefined || body.pageId === '') {
-        res.status(400).json({
+        return res.status(400).json({
             error: 100,
             mensaje: 'pageId es requerido'
-        })
+        });
     }
 
     if (body.run === undefined || body.run === '') {
-        res.status(400).json({
+        return res.status(400).json({
             error: 100,
             mensaje: 'run es requerido'
-        })
+        });
     }
 
     if (body.tipo_documento === undefined || body.tipo_documento === '') {
-        res.status(400).json({
+        return res.status(400).json({
             error: 100,
             mensaje: 'tipo_documento es requerido'
-        })
+        });
     }
 
     if (body.numero_documento === undefined || body.numero_documento === '') {
-        res.status(400).json({
+        return res.status(400).json({
             error: 100,
             mensaje: 'numero_documento es requerido'
-        })
+        });
     }
 
     if (body.captcha_txt === undefined || body.captcha_txt === '') {
-        res.status(400).json({
+        return res.status(400).json({
             error: 100,
             mensaje: 'captcha_txt es requerido'
-        })
+        });
     }
 
     //consulta el browser por la targetid:body.browserId
     let target = null;
 
     try {
+        //verifica estado del browser levantado en la primera llamada.
         target = await browser.waitForTarget(target => target._targetId === body.browserId, { timeout: 3000 });
-    } catch (e) {
-        res.status(400).json({
-            error: 100,
-            mensaje: 'timeout browser id es incorrecto, verifique'
-        })
-        return;
-    }
 
-    if (target === null) {
-        res.status(400).json({
+        browser = await target.browser();
+
+    } catch (error) {
+        return res.status(400).json({
             error: 100,
-            mensaje: 'browser id es incorrecto, verifique'
+            mensaje: `Error: al revisar estado del browser, verifique ${error}`
         })
     }
 
-    browser = await target.browser();
-
-    //obtiene el listado de paginas abiertas
-    let pageList = await browser.pages();
-    //consulta la pagina por el targetid:body.pageId
-    let page = await pageList.find(pag => pag.target()._targetId === body.pageId);
-    if (page === undefined) {
-        res.status(400).json({
+    let page = null;
+    try{
+         //obtiene el listado de pestañas abiertas
+         let pageList = await browser.pages();
+         //consulta la pestaña por el targetid:body.pageId
+         page = await pageList.find(pag => pag.target()._targetId === body.pageId);
+         
+         if (page === undefined) {
+             return res.status(400).json({
+                 error: 100,
+                 mensaje: `Error: page id no existe en el listado de pestañas abiertas, verifique`
+             })
+         }
+         
+    }catch(error){
+        return res.status(400).json({
             error: 100,
-            mensaje: 'Error: page id es incorrecto, verifique'
+            mensaje: `Error: al revisar estado de pestaña del browser, verifique ${error}`
         })
     }
 
-    if (body !== undefined) {
+    //completa los campos
+    try{
+
         await page.type("[name='form:run']", body.run);
         await page.select("[name='form:selectDocType']", body.tipo_documento);
         await page.type("[name='form:docNumber']", body.numero_documento);
         await page.type("[name='form:inputCaptcha']", body.captcha_txt);
+        //hace el clic
         await page.evaluate(() => checkFields());
-        //Una vez que hace clic verifica si se levanta un popup con mensajes de la web.
-        const popupError = await page
-            .waitForSelector("[id='confirmError']", {
-                timeout: 1000
-            })
-            .then((element) => {
-                //console.log(`Error al validar documento`);
-                return element;
-            }, (error) => {
-                //console.log(`Validación correcta`);
-                return null;
-            });
 
-        //Selecciona para sacar el mensaje del popup.
-        let selector = "[id='confirmError'] [class='generalText']";
-        if (popupError == null) {
-            //Selecciona para sacar el estado del documento.
-            selector = "[class='setWidthOfSecondColumn']";
-        }
-
-        const resp = await page
-            .waitForSelector(selector, {
-                timeout: 1000
-            })
-            .then((element) => {
-                return {
-                    estado: 100,
-                    elemento: element,
-                    mensaje: `OK selector ${selector}`
-                };
-            }, (error) => {
-                return {
-                    estado: 0,
-                    elemento: null,
-                    mensaje: error
-                };
-            });
-
-        if (resp.estado == 100) {
-            const mensaje = await (await resp.elemento.getProperty('textContent')).jsonValue();
-            //Si el popup no existe, entonces pasó la validación y no hay error.
-            if (popupError == null) {
-                console.log({ error: 0, mensaje });
-                res.status(200).json({ error: 0, mensaje });
-            } else {
-                //Si el popup existe, entonces error.
-                console.log({ error: 100, mensaje });
-                res.status(200).json({ error: 100, mensaje });
-            }
-        } else {
-            console.log({ error: 100, mensaje: resp.error });
-            res.status(500).json({ error: 100, mensaje: resp.error });
-        }
-
-        //await browser.close();
+    }catch(error){
         page.close();
+        return res.status(500).json({
+            error: 100,
+            mensaje: `Error: al completar el formulario para realizar la consulta ${error}`
+        })
+    }
+    //revisamos si una vez que hizo clic se levantó un popup.
+    let popupError = null;
+    try{
+        //obtiene el popup.
+        popupError = await page.waitForSelector("[id='confirmError']", {
+            timeout: 3000,
+        });
+    }catch(error){
+        //el popup no existe.
+        popupError = null
+    }
 
+    let selector = null;
+    //si no hay un popup
+    if (popupError === null) {
+        //Selecciona el elemento que contiene el estado del documento.
+        selector = "[class='setWidthOfSecondColumn']";
+    }else{
+        //Selecciona el elemento que contiene el mensaje de alerta del sitio.
+        selector = "[id='confirmError'] [class='generalText']";
+    }
+
+    //Selecciona el elemento según lo que contenga la variable selector.
+    //1. El elemento que contiene el estado de la cedula.
+    //2. El elemento (popup) con el mensaje del sitio.
+    let selector_respuesta = null;
+    try{
+        
+        selector_respuesta = await page.waitForSelector(selector, {
+            timeout: 3000
+        });
+
+    }catch(error){
+        page.close();
+      
+        if(popupError){
+            return res.status(400).json({
+                error: 100,
+                mensaje: `Error: al seleccionar elemento que contiene mensaje de alerta del sitio, intente nuevamente`
+            })
+
+        }else{
+            return res.status(400).json({
+                error: 100,
+                mensaje: `Error: al seleccionar elemento que contiene estado de la cedula, intente nuevamente`
+            })
+        }
+    }
+
+    //Si existe el selector
+    if(selector_respuesta){
+
+        try{
+
+            let mensaje = await selector_respuesta.getProperty('textContent');
+            mensaje = await mensaje.jsonValue();
+
+            //Si hay un mensaje y no hay un popup de alerta del sitio.
+            //entonces capturamos el estado de la cedula!!!
+            if(mensaje && !popupError){
+                res.status(200).json({ error: 0, mensaje });
+                
+            //Hay popup con mensaje del sitio.
+            }else if(mensaje && popupError){
+                res.status(200).json({ error: 100, mensaje });
+
+            //Se produjo algo inesperado.
+            }else{
+                res.status(200).json({ 
+                    error: 100, 
+                    mensaje: `No se pudo leer la respuesta del sitio, verifique que la información enviada sea correcta e intente nuevamente. Datos recibidos: RUN ${body.run}, Número Documento ${body.numero_documento}y Tipo Documento ${body.tipo_documento}.`
+                });
+            }
+            //await browser.close();
+            page.close();
+
+        }catch(error){
+            page.close();
+            //hay popup.
+            if(popupError){
+                return res.status(400).json({
+                    error: 100,
+                    mensaje: `Error: al leer mensaje de alerta del sitio, intente nuevamente`
+                })
+            //no hay popup, entonces el error se produjo al leer el estado de la cedula.
+            }else{
+                return res.status(400).json({
+                    error: 100,
+                    mensaje: `Error: al leer estado de la cedula, intente nuevamente`
+                })
+            }
+        }
     }
 
 });
