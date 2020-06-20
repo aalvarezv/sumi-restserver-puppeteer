@@ -130,7 +130,7 @@ app.post('/validaDocumento', async function(req, res) {
         browser = await target.browser();
 
     } catch (error) {
-        return res.status(400).json({
+        return res.status(500).json({
             error: 100,
             mensaje: `Error: al revisar estado del browser, verifique ${error}`
         })
@@ -144,14 +144,14 @@ app.post('/validaDocumento', async function(req, res) {
          page = await pageList.find(pag => pag.target()._targetId === body.pageId);
          
          if (page === undefined) {
-             return res.status(400).json({
+             return res.status(500).json({
                  error: 100,
                  mensaje: `Error: page id no existe en el listado de pestañas abiertas, verifique`
              })
          }
          
     }catch(error){
-        return res.status(400).json({
+        return res.status(500).json({
             error: 100,
             mensaje: `Error: al revisar estado de pestaña del browser, verifique ${error}`
         })
@@ -210,13 +210,13 @@ app.post('/validaDocumento', async function(req, res) {
         page.close();
       
         if(popupError){
-            return res.status(400).json({
+            return res.status(500).json({
                 error: 100,
                 mensaje: `Error: al seleccionar elemento que contiene mensaje de alerta del sitio, intente nuevamente`
             })
 
         }else{
-            return res.status(400).json({
+            return res.status(500).json({
                 error: 100,
                 mensaje: `Error: al seleccionar elemento que contiene estado de la cedula, intente nuevamente`
             })
@@ -235,14 +235,14 @@ app.post('/validaDocumento', async function(req, res) {
             //entonces capturamos el estado de la cedula!!!
             if(mensaje && !popupError){
                 res.status(200).json({ error: 0, mensaje });
-                
+
             //Hay popup con mensaje del sitio.
             }else if(mensaje && popupError){
                 res.status(200).json({ error: 100, mensaje });
 
             //Se produjo algo inesperado.
             }else{
-                res.status(200).json({ 
+                res.status(400).json({ 
                     error: 100, 
                     mensaje: `No se pudo leer la respuesta del sitio, verifique que la información enviada sea correcta e intente nuevamente. Datos recibidos: RUN ${body.run}, Número Documento ${body.numero_documento}y Tipo Documento ${body.tipo_documento}.`
                 });
@@ -254,13 +254,13 @@ app.post('/validaDocumento', async function(req, res) {
             page.close();
             //hay popup.
             if(popupError){
-                return res.status(400).json({
+                return res.status(500).json({
                     error: 100,
                     mensaje: `Error: al leer mensaje de alerta del sitio, intente nuevamente`
                 })
             //no hay popup, entonces el error se produjo al leer el estado de la cedula.
             }else{
-                return res.status(400).json({
+                return res.status(500).json({
                     error: 100,
                     mensaje: `Error: al leer estado de la cedula, intente nuevamente`
                 })
