@@ -6,7 +6,7 @@ Este es un pequeño servidor de express básico que permite hacer web scraping u
 Respuesta
 ```
 {
-    "browserId": "eb0e1a3e-7060-4a35-9ad3-2947235c05fd",
+    "browserId": "ws://127.0.0.1:50982/devtools/browser/dd1b34ff-9013-45cd-be36-25a74a422631",
     "pageId": "5F3221409F4B900AAEFE3DDA0D35BA81",
     "archivo": "captcha.png",
     "base64": "imagen_captcha_codificada"

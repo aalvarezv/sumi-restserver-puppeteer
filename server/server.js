@@ -1,18 +1,24 @@
 const puppeteer = require('puppeteer-core');
 const { getExecutablePath } = require('./util/utils');
 
-require('./config/config')
-const express = require('express')
-const bodyParser = require('body-parser')
-const app = express()
+require('./config/config');
+const express = require('express');
+const bodyParser = require('body-parser');
+const app = express();
+const fs = require("fs");
+const { openDB, createDB } = require('./db/openDb');
+
 
 // parse application/x-www-form-urlencoded
 app.use(bodyParser.urlencoded({ extended: false }))
     // parse application/json
 app.use(bodyParser.json())
 
-let browser = null;
-let page = null;
+
+//lee el archivo y aquellos socket que lleven mas de 2 minutos los termina.
+app.get('/test', async function(req, res) {
+    
+});
 
 app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
 
@@ -22,26 +28,26 @@ app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
     })();
 
     const lauchpuppeteer = async launchOptions => {
-        if (browser === null) {
-            browser = await puppeteer.launch({
-                defaultViewport: null,
-                headless: false,
-                slowMo: 80,
-                openInExistingWindow: true,
-                args: [
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-renderer-backgrounding',
-                    '--no-sandbox'
-                ],
-                ...launchOptions
-            });
-        }
+
+        let browser = await puppeteer.launch({
+            defaultViewport: null,
+            //Muestra el navegador ejecutando la tarea (headless= false).
+            //Oculta el navegador ejecuta la tarea (headless = true).
+            headless: false,
+            //para trabajar con chrome y no chromiun
+            args: [
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--no-sandbox'
+            ], 
+            ...launchOptions
+        });
+       
 
         //const [page] = await browser.Page(); abre 1 pagina a la vez y la cierra
-        page = await browser.newPage();
-        //obtiene el targetid del browser para devolver en la respuesta.
-        let browserTargetId = browser.target()._targetId;
+        let page = await browser.newPage();
+
         //obtiene el targetid de la pagina para devolver en la respuesta.
         let pageTargetId = page.target()._targetId;
         try {
@@ -49,26 +55,76 @@ app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
                 waitUntil: "networkidle0",
                 timeout: 30000
             });
-        } catch (e) {
-            console.log(e.message);
+        } catch (error) {
+            await browser.close();
             return res.status(504).json({
                 error: 100,
-                mensaje: e.message
+                mensaje: 'Error: al abrir ventana del portal del registro civil'
             });
         }
+
         //obtiene el primer img dentro del div id='form:captchaPanel'
         const elements = await page.$$("[id='form:captchaPanel'] img");
         //graba la imagen en el disco local
         //await elements[0].screenshot({ path: "captcha4.png" })
         //obtiene la imagen en base64
         const screenshotb64 = await elements[0].screenshot({ encoding: "base64" });
+        //obtiene el websocket creado para conectarse nuevamente y recuperar la ventana.
+        const browserWSEndpoint = browser.wsEndpoint();
+        
+        
+        //se crea una base de datos sqlite.
+        //en la cual se almacenan los socket que serán cerrados si su estancia
+        //sobrepasa los 2 minutos.
+        try {
+            //abre la conexión a la base.
+            let db = await openDB();
+            //crea las tablas si no existe
+            await createDB();
+           
+            //consulta los registros almacenados para saber cuanto tiempo llevan.
+            const stmt = await db.prepare(
+                `SELECT 
+                    browserId, pageId, fechahora,
+                    datetime(julianday(datetime('now'))) AS fechahora_actual, 
+                    ((( julianday(CURRENT_TIMESTAMP) - julianday(fechahora) ) * 86400) / 60) AS diff_minutos 
+                FROM sockets`
+            );
+            //obtiene los resultados.
+            const result = await stmt.all();
+            //itera sobre los resultados para cerrar los browser con mas de 2 minutos.
+            for(const item of result){
+                 if(item.diff_minutos > 2){
+                    try {
+
+                        //elimina el registro de la base de datos.
+                        await db.exec(`DELETE FROM sockets WHERE browserId = '${item.browserId}'`);
+                        //intenta cerrar el browser.
+                        let browserExp = await puppeteer.connect({browserWSEndpoint: item.browserId});
+                        await browserExp.close();
+                       
+
+                    } catch (error) {
+                        console.log(error)
+                    }
+                }
+            }
+    
+            //inserta el nuevo registro de socket.
+            await db.exec(`
+                INSERT INTO sockets (browserId, pageId) values ('${browserWSEndpoint}','${pageTargetId}');
+            `);
+            
+        } catch (error) {
+            console.log(error);
+        }
+
         //Envia mensaje al cliente con la screen en base64 de la captcha
         res.status(200).json({
-            browserId: browserTargetId,
+            browserId: browserWSEndpoint,
             pageId: pageTargetId,
             archivo: 'captcha.png',
             base64: screenshotb64
-
         });
 
     }
@@ -76,7 +132,7 @@ app.get('/validaDocumentoSolicitaCaptcha', function(req, res) {
 });
 
 app.post('/validaDocumento', async function(req, res) {
-
+    
     let body = req.body;
     if (body.browserId === undefined || body.browserId === '') {
         return res.status(400).json({
@@ -120,19 +176,14 @@ app.post('/validaDocumento', async function(req, res) {
         });
     }
 
-    //consulta el browser por la targetid:body.browserId
-    let target = null;
-
+    let browser = null;
     try {
-        //verifica estado del browser levantado en la primera llamada.
-        target = await browser.waitForTarget(target => target._targetId === body.browserId, { timeout: 3000 });
-
-        browser = await target.browser();
-
+        //verifica el socket creado en la primera llamada y se conecta.
+        browser = await puppeteer.connect({browserWSEndpoint: body.browserId});
     } catch (error) {
         return res.status(500).json({
             error: 100,
-            mensaje: `Error: al revisar estado del browser, verifique ${error}`
+            mensaje: `Error: socket no disponible ${body.browserId}, intente nuevamente`
         })
     }
 
@@ -142,18 +193,18 @@ app.post('/validaDocumento', async function(req, res) {
          let pageList = await browser.pages();
          //consulta la pestaña por el targetid:body.pageId
          page = await pageList.find(pag => pag.target()._targetId === body.pageId);
-         
+        
          if (page === undefined) {
              return res.status(500).json({
                  error: 100,
-                 mensaje: `Error: page id no existe en el listado de pestañas abiertas, verifique`
+                 mensaje: `Error: page id no existe en el listado de pestañas abiertas, intente nuevamente`
              })
          }
          
     }catch(error){
         return res.status(500).json({
             error: 100,
-            mensaje: `Error: al revisar estado de pestaña del browser, verifique ${error}`
+            mensaje: `Error: al revisar estado de pestaña del browser, intente nuevamente`
         })
     }
 
@@ -168,12 +219,14 @@ app.post('/validaDocumento', async function(req, res) {
         await page.evaluate(() => checkFields());
 
     }catch(error){
-        page.close();
+        await browser.close();
+
         return res.status(500).json({
             error: 100,
             mensaje: `Error: al completar el formulario para realizar la consulta ${error}`
         })
     }
+
     //revisamos si una vez que hizo clic se levantó un popup.
     let popupError = null;
     try{
@@ -207,19 +260,19 @@ app.post('/validaDocumento', async function(req, res) {
         });
 
     }catch(error){
-        page.close();
+        await browser.close();
       
         if(popupError){
             return res.status(500).json({
                 error: 100,
                 mensaje: `Error: al seleccionar elemento que contiene mensaje de alerta del sitio, intente nuevamente`
-            })
+            });
 
         }else{
             return res.status(500).json({
                 error: 100,
                 mensaje: `Error: al seleccionar elemento que contiene estado de la cedula, intente nuevamente`
-            })
+            });
         }
     }
 
@@ -240,30 +293,41 @@ app.post('/validaDocumento', async function(req, res) {
             }else if(mensaje && popupError){
                 res.status(200).json({ error: 100, mensaje });
 
-            //Se produjo algo inesperado.
+            //Algo inesperado.
             }else{
                 res.status(400).json({ 
                     error: 100, 
                     mensaje: `No se pudo leer la respuesta del sitio, verifique que la información enviada sea correcta e intente nuevamente. Datos recibidos: RUN ${body.run}, Número Documento ${body.numero_documento}y Tipo Documento ${body.tipo_documento}.`
                 });
             }
-            //await browser.close();
-            page.close();
+
+            try {
+                //abre la conexión a la base.
+                let db = await openDB();
+                //crea las tablas si no existe
+                await createDB();
+    
+                await db.exec(`DELETE FROM sockets WHERE browserId = '${body.browserId}'`);
+            }catch(error){
+                console.log(error);
+            }
+              
+            await browser.close();
 
         }catch(error){
-            page.close();
+            await browser.close();
             //hay popup.
             if(popupError){
                 return res.status(500).json({
                     error: 100,
                     mensaje: `Error: al leer mensaje de alerta del sitio, intente nuevamente`
-                })
+                });
             //no hay popup, entonces el error se produjo al leer el estado de la cedula.
             }else{
                 return res.status(500).json({
                     error: 100,
                     mensaje: `Error: al leer estado de la cedula, intente nuevamente`
-                })
+                });
             }
         }
     }
@@ -271,5 +335,5 @@ app.post('/validaDocumento', async function(req, res) {
 });
 
 app.listen(process.env.PORT, () => {
-    console.log(`Escuchando puerto ${process.env.PORT}`)
+    console.log(`Escuchando puerto ${process.env.PORT}`);
 })
